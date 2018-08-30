@@ -10,9 +10,9 @@
 #include <asm/termbits.h> /* struct termios2 */
 #include <time.h>
 
+#define CANUSB_BAUD_RATE_DEFAULT 115200
 
-
-#define CANUSB_BAUD_RATE 2000000
+int CANUSB_BAUD_RATE = CANUSB_BAUD_RATE_DEFAULT;
 
 typedef enum {
   CANUSB_SPEED_1000000 = 0x01,
@@ -337,7 +337,7 @@ int main(int argc, char *argv[])
   char *tty_device = NULL;
   CANUSB_SPEED speed = 0;
 
-  while ((c = getopt(argc, argv, "htd:s:")) != -1) {
+  while ((c = getopt(argc, argv, "htd:s:b:")) != -1) {
     switch (c) {
     case 'h':
       display_help(argv[0]);
@@ -353,6 +353,10 @@ int main(int argc, char *argv[])
 
     case 's':
       speed = canusb_int_to_speed(atoi(optarg));
+      break;
+
+    case 'b':
+      CANUSB_BAUD_RATE = atoi(optarg);
       break;
 
     case '?':
