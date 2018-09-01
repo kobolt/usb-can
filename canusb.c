@@ -10,9 +10,7 @@
 #include <asm/termbits.h> /* struct termios2 */
 #include <time.h>
 
-
-
-#define CANUSB_BAUD_RATE 2000000
+#define CANUSB_BAUD_RATE_DEFAULT 115200
 
 typedef enum {
   CANUSB_SPEED_1000000 = 0x01,
@@ -280,7 +278,7 @@ static void dump_data_frames(int tty_fd)
 
 
 
-static int adapter_init(char *tty_device)
+static int adapter_init(char *tty_device, int baudrate)
 {
   int tty_fd, result;
   struct termios2 tio;
@@ -303,8 +301,8 @@ static int adapter_init(char *tty_device)
   tio.c_iflag = IGNPAR;
   tio.c_oflag = 0;
   tio.c_lflag = 0;
-  tio.c_ispeed = CANUSB_BAUD_RATE;
-  tio.c_ospeed = CANUSB_BAUD_RATE;
+  tio.c_ispeed = baudrate;
+  tio.c_ospeed = baudrate;
 
   result = ioctl(tty_fd, TCSETS2, &tio);
   if (result == -1) {
@@ -326,6 +324,7 @@ static void display_help(char *progname)
      "  -t          Print TTY/serial traffic debugging info on stderr.\n"
      "  -d DEVICE   Use TTY DEVICE.\n"
      "  -s SPEED    Set CAN SPEED in bps.\n"
+     "  -b BAUDRATE Set CAN USB baudrate in bps.\n"
      "\n");
 }
 
@@ -336,8 +335,9 @@ int main(int argc, char *argv[])
   int c, tty_fd;
   char *tty_device = NULL;
   CANUSB_SPEED speed = 0;
+  int baudrate = CANUSB_BAUD_RATE_DEFAULT; 
 
-  while ((c = getopt(argc, argv, "htd:s:")) != -1) {
+  while ((c = getopt(argc, argv, "htd:s:b:")) != -1) {
     switch (c) {
     case 'h':
       display_help(argv[0]);
@@ -353,6 +353,10 @@ int main(int argc, char *argv[])
 
     case 's':
       speed = canusb_int_to_speed(atoi(optarg));
+      break;
+
+    case 'b':
+      baudrate = atoi(optarg);
       break;
 
     case '?':
@@ -374,7 +378,7 @@ int main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
 
-  tty_fd = adapter_init(tty_device);
+  tty_fd = adapter_init(tty_device, baudrate);
   if (tty_fd == -1) {
     return EXIT_FAILURE;
   }
