@@ -237,6 +237,8 @@ static int command_settings(int tty_fd, CANUSB_SPEED speed, CANUSB_MODE mode, CA
   return 0;
 }
 
+
+
 static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned char id_lsb, unsigned char id_msb, unsigned char data[], int data_length_code)
 {
 #define MAX_FRAME_SIZE 13
@@ -283,6 +285,84 @@ static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned char id_lsb,
   return 0;
 }
 
+
+
+static int hex_value(int c)
+{
+  if (c >= 0x30 && c <= 0x39) /* '0' - '9' */
+    return c - 0x30;
+  else if (c >= 0x41 && c <= 0x46) /* 'A' - 'F' */
+    return (c - 0x41) + 10;
+  else if (c >= 0x61 && c <= 0x66) /* 'a' - 'f' */
+    return (c - 0x61) + 10;
+  else
+    return -1;
+}
+
+
+
+static int convert_from_hex(char *hex_string, unsigned char *bin_string, int bin_string_len)
+{
+  int n1, n2, high;
+
+  high = -1;
+  n1 = n2 = 0;
+  while (hex_string[n1] != '\0') {
+    if (hex_value(hex_string[n1]) >= 0) {
+      if (high == -1) {
+        high = hex_string[n1];
+      } else {
+        bin_string[n2] = hex_value(high) * 16 + hex_value(hex_string[n1]);
+        if (n2 >= bin_string_len)
+          break;
+        n2++;
+        high = -1;
+      }
+    }
+    n1++;
+  }
+
+  return n2;
+}
+
+
+
+static int inject_data_frame(int tty_fd, char *hex_id, char *hex_data)
+{
+  int data_len;
+  unsigned char binary_data[8];
+  unsigned char binary_id_lsb = 0, binary_id_msb = 0;
+
+  data_len = convert_from_hex(hex_data, binary_data, sizeof(binary_data));
+  if (data_len == 0) {
+    fprintf(stderr, "Unable to convert data from hex to binary!\n");
+    return -1;
+  }
+
+  switch (strlen(hex_id)) {
+  case 1:
+    binary_id_lsb = hex_value(hex_id[0]);
+    break;
+
+  case 2:
+    binary_id_lsb = (hex_value(hex_id[0]) * 16) + hex_value(hex_id[1]);
+    break;
+
+  case 3:
+    binary_id_msb = hex_value(hex_id[0]);
+    binary_id_lsb = (hex_value(hex_id[1]) * 16) + hex_value(hex_id[2]);
+    break;
+
+  default:
+    fprintf(stderr, "Unable to convert ID from hex to binary!\n");
+    return -1;
+  }
+
+  return send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, binary_id_lsb, binary_id_msb, binary_data, data_len);
+}
+
+
+
 static void dump_data_frames(int tty_fd)
 {
   int i, frame_len;
@@ -319,6 +399,8 @@ static void dump_data_frames(int tty_fd)
     }
   }
 }
+
+
 
 static int adapter_init(char *tty_device, int baudrate)
 {
@@ -367,6 +449,8 @@ static void display_help(char *progname)
      "  -d DEVICE   Use TTY DEVICE.\n"
      "  -s SPEED    Set CAN SPEED in bps.\n"
      "  -b BAUDRATE Set CAN USB baudrate in bps.\n"
+     "  -i ID       Inject using ID (specified as hex string).\n"
+     "  -j DATA     CAN DATA to inject (specified as hex string).\n"
      "\n");
 }
 
@@ -375,11 +459,11 @@ static void display_help(char *progname)
 int main(int argc, char *argv[])
 {
   int c, tty_fd;
-  char *tty_device = NULL;
+  char *tty_device = NULL, *inject_data = NULL, *inject_id = NULL;
   CANUSB_SPEED speed = 0;
   int baudrate = CANUSB_BAUD_RATE_DEFAULT;
 
-  while ((c = getopt(argc, argv, "htd:s:b:")) != -1) {
+  while ((c = getopt(argc, argv, "htd:s:b:i:j:")) != -1) {
     switch (c) {
     case 'h':
       display_help(argv[0]);
@@ -399,6 +483,14 @@ int main(int argc, char *argv[])
 
     case 'b':
       baudrate = atoi(optarg);
+      break;
+
+    case 'i':
+      inject_id = optarg;
+      break;
+
+    case 'j':
+      inject_data = optarg;
       break;
 
     case '?':
@@ -427,10 +519,22 @@ int main(int argc, char *argv[])
 
   command_settings(tty_fd, speed, CANUSB_MODE_NORMAL, CANUSB_FRAME_STANDARD);
 
-  unsigned char data[5] = {0x01, 0x02, 0x03, 0x04, 0x05};
-  send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, 0x01, 0x01, data, sizeof(data));
-
-  dump_data_frames(tty_fd);
+  if (inject_data == NULL) {
+    /* Dumping mode (default). */
+    dump_data_frames(tty_fd);
+  } else {
+    /* Inject mode. */
+    if (inject_id == NULL) {
+      fprintf(stderr, "Please specify a ID for injection!\n");
+      display_help(argv[0]);
+      return EXIT_FAILURE;
+    }
+    if (inject_data_frame(tty_fd, inject_id, inject_data) == -1) {
+      return EXIT_FAILURE;
+    } else {
+      return EXIT_SUCCESS;
+    }
+  }
 
   return EXIT_SUCCESS;
 }
