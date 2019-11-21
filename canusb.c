@@ -237,7 +237,51 @@ static int command_settings(int tty_fd, CANUSB_SPEED speed, CANUSB_MODE mode, CA
   return 0;
 }
 
+static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned char id_lsb, unsigned char id_msb, unsigned char data[], int data_length_code)
+{
+#define MAX_FRAME_SIZE 13
+  int data_frame_len = 0;
+  unsigned char data_frame[MAX_FRAME_SIZE] = {0x00};
 
+  if (data_length_code < 0 || data_length_code > 8)
+  {
+    fprintf(stderr, "Data length code (DLC) must be between 0 and 8!\n");
+    return -1;
+  }
+
+  /* Byte 0: Packet Start */
+  data_frame[data_frame_len++] = 0xaa;
+
+  /* Byte 1: CAN Bus Data Frame Information */
+  data_frame[data_frame_len] = 0x00;
+  data_frame[data_frame_len] |= 0xC0; /* Bit 7 Always 1, Bit 6 Always 1 */
+  if (frame == CANUSB_FRAME_STANDARD)
+    data_frame[data_frame_len] &= 0xDF; /* STD frame */
+  else /* CANUSB_FRAME_EXTENDED */
+    data_frame[data_frame_len] |= 0x20; /* EXT frame */
+  data_frame[data_frame_len] &= 0xEF; /* 0=Data */
+  data_frame[data_frame_len] |= data_length_code; /* DLC=data_len */
+  data_frame_len++;
+
+  /* Byte 2 to 3: ID */
+  data_frame[data_frame_len++] = id_lsb; /* lsb */
+  data_frame[data_frame_len++] = id_msb; /* msb */
+
+  /* Byte 4 to (4+data_len): Data */
+  for (int i = 0; i < data_length_code; i++)
+    data_frame[data_frame_len++] = data[i];
+
+  /* Last byte: End of frame */
+  data_frame[data_frame_len++] = 0x55;
+
+  if (frame_send(tty_fd, data_frame, data_frame_len) < 0)
+  {
+    fprintf(stderr, "Unable to send frame!\n");
+    return -1;
+  }
+
+  return 0;
+}
 
 static void dump_data_frames(int tty_fd)
 {
@@ -276,8 +320,6 @@ static void dump_data_frames(int tty_fd)
   }
 }
 
-
-
 static int adapter_init(char *tty_device, int baudrate)
 {
   int tty_fd, result;
@@ -288,7 +330,7 @@ static int adapter_init(char *tty_device, int baudrate)
     fprintf(stderr, "open(%s) failed: %s\n", tty_device, strerror(errno));
     return -1;
   }
- 
+
   result = ioctl(tty_fd, TCGETS2, &tio);
   if (result == -1) {
     fprintf(stderr, "ioctl() failed: %s\n", strerror(errno));
@@ -335,7 +377,7 @@ int main(int argc, char *argv[])
   int c, tty_fd;
   char *tty_device = NULL;
   CANUSB_SPEED speed = 0;
-  int baudrate = CANUSB_BAUD_RATE_DEFAULT; 
+  int baudrate = CANUSB_BAUD_RATE_DEFAULT;
 
   while ((c = getopt(argc, argv, "htd:s:b:")) != -1) {
     switch (c) {
@@ -384,8 +426,11 @@ int main(int argc, char *argv[])
   }
 
   command_settings(tty_fd, speed, CANUSB_MODE_NORMAL, CANUSB_FRAME_STANDARD);
+
+  unsigned char data[5] = {0x01, 0x02, 0x03, 0x04, 0x05};
+  send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, 0x01, 0x01, data, sizeof(data));
+
   dump_data_frames(tty_fd);
 
   return EXIT_SUCCESS;
 }
-
