@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <asm/termbits.h> /* struct termios2 */
 #include <time.h>
+#include <ctype.h>
 
 #define CANUSB_BAUD_RATE_DEFAULT 115200
 
@@ -135,6 +136,13 @@ static int frame_send(int tty_fd, unsigned char *frame, int frame_len)
     printf(">>> ");
     for (i = 0; i < frame_len; i++) {
       printf("%02x ", frame[i]);
+    }
+    if (print_traffic > 1) {
+      printf("    '");
+      for (i = 4; i < frame_len - 1; i++) {
+        printf("%c", isalnum(frame[i]) ? frame[i] : '.');
+      }
+      printf("'");
     }
     printf("\n");
   }
@@ -472,7 +480,7 @@ int main(int argc, char *argv[])
       return EXIT_SUCCESS;
 
     case 't':
-      print_traffic = 1;
+      print_traffic++;
       break;
 
     case 'd':
