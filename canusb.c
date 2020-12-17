@@ -313,9 +313,11 @@ static int convert_from_hex(char *hex_string, unsigned char *bin_string, int bin
         high = hex_string[n1];
       } else {
         bin_string[n2] = hex_value(high) * 16 + hex_value(hex_string[n1]);
-        if (n2 >= bin_string_len)
-          break;
         n2++;
+        if (n2 >= bin_string_len) {
+          printf("hex string truncated to %d bytes\n", n2);
+          break;
+        }
         high = -1;
       }
     }
