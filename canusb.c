@@ -10,6 +10,7 @@
 #include <asm/termbits.h> /* struct termios2 */
 #include <time.h>
 #include <ctype.h>
+#include <signal.h>
 
 #define CANUSB_BAUD_RATE_DEFAULT 115200
 
@@ -42,7 +43,7 @@ typedef enum {
 
 
 
-
+int running = 1;
 static int print_traffic = 0;
 
 
@@ -379,7 +380,7 @@ static void dump_data_frames(int tty_fd)
   unsigned char frame[32];
   struct timespec ts;
 
-  while (1) {
+  while (running) {
     frame_len = frame_recv(tty_fd, frame, sizeof(frame));
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -466,6 +467,13 @@ static void display_help(char *progname)
 
 
 
+void sigterm(int signo)
+{
+  running = 0;
+}
+
+
+
 int main(int argc, char *argv[])
 {
   int c, tty_fd;
@@ -509,6 +517,10 @@ int main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
   }
+
+  signal(SIGTERM, sigterm);
+  signal(SIGHUP, sigterm);
+  signal(SIGINT, sigterm);
 
   if (tty_device == NULL) {
     fprintf(stderr, "Please specify a TTY!\n");
