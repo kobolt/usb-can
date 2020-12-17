@@ -11,7 +11,12 @@
 #include <time.h>
 #include <ctype.h>
 #include <signal.h>
+#include <sys/time.h>
 
+#define DEFAULT_GAP 200 /* ms */
+#define MODE_RANDOM	0
+#define MODE_INCREMENT	1
+#define MODE_FIX	2
 #define CANUSB_BAUD_RATE_DEFAULT 115200
 
 typedef enum {
@@ -43,7 +48,10 @@ typedef enum {
 
 
 
+int count = 0;
 int running = 1;
+int mode = MODE_FIX;
+float gap = DEFAULT_GAP;
 static int print_traffic = 0;
 
 
@@ -343,6 +351,16 @@ static int inject_data_frame(int tty_fd, char *hex_id, char *hex_data)
   int data_len;
   unsigned char binary_data[8];
   unsigned char binary_id_lsb = 0, binary_id_msb = 0;
+  struct timespec ts;
+  struct timeval now;
+  int error = 0;
+
+  ts.tv_sec = gap / 1000;
+  ts.tv_nsec = (long)(((long long)(gap * 1000000)) % 1000000000LL);
+
+  /* set seed value for pseudo random numbers */
+  gettimeofday(&now, NULL);
+  srandom(now.tv_usec);
 
   data_len = convert_from_hex(hex_data, binary_data, sizeof(binary_data));
   if (data_len == 0) {
@@ -369,7 +387,29 @@ static int inject_data_frame(int tty_fd, char *hex_id, char *hex_data)
     return -1;
   }
 
-  return send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, binary_id_lsb, binary_id_msb, binary_data, data_len);
+  while (running && ! error) {
+    if (ts.tv_sec || ts.tv_nsec)
+      nanosleep(&ts, NULL);
+
+    if (count && (--count == 0))
+      running = 0;
+
+    if (mode == MODE_RANDOM) {
+      int i;
+      //binary_id_lsb = random();
+      for (i = 0; i < data_len; i++)
+        binary_data[i] = random();
+    } else if (mode == MODE_INCREMENT) {
+      int i;
+      //binary_id_lsb++;
+      for (i = 0; i < data_len; i++)
+        binary_data[i]++;
+    }
+
+    error = send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, binary_id_lsb, binary_id_msb, binary_data, data_len);
+  }
+
+  return error;
 }
 
 
@@ -462,7 +502,10 @@ static void display_help(char *progname)
      "  -b BAUDRATE Set CAN USB baudrate in bps.\n"
      "  -i ID       Inject using ID (specified as hex string).\n"
      "  -j DATA     CAN DATA to inject (specified as hex string).\n"
-     "\n");
+     "  -n COUNT    terminate after COUNT frames (default infinite).\n"
+     "  -g MS       gap in milli seconds (default: %d ms).\n"
+     "  -m MODE     payload mode (0 = random, 1 = incremental, 2 = fix).\n"
+     "\n", DEFAULT_GAP);
 }
 
 
@@ -481,7 +524,7 @@ int main(int argc, char *argv[])
   CANUSB_SPEED speed = 0;
   int baudrate = CANUSB_BAUD_RATE_DEFAULT;
 
-  while ((c = getopt(argc, argv, "htd:s:b:i:j:")) != -1) {
+  while ((c = getopt(argc, argv, "htd:s:b:i:j:n:g:m:")) != -1) {
     switch (c) {
     case 'h':
       display_help(argv[0]);
@@ -509,6 +552,18 @@ int main(int argc, char *argv[])
 
     case 'j':
       inject_data = optarg;
+      break;
+
+    case 'n':
+      count = atoi(optarg);
+      break;
+
+    case 'g':
+      gap = strtof(optarg, NULL);
+      break;
+
+    case 'm':
+      mode = atoi(optarg);
       break;
 
     case '?':
