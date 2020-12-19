@@ -176,7 +176,7 @@ static int frame_recv(int tty_fd, unsigned char *frame, int frame_len_max)
     fprintf(stderr, "<<< ");
 
   frame_len = 0;
-  while (1) {
+  while (running) {
     result = read(tty_fd, &byte, 1);
     if (result == -1) {
       if (errno != EAGAIN && errno != EWOULDBLOCK) {
