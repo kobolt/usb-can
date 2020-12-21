@@ -13,11 +13,8 @@
 #include <signal.h>
 #include <sys/time.h>
 
-#define DEFAULT_GAP 200 /* ms */
-#define MODE_RANDOM	0
-#define MODE_INCREMENT	1
-#define MODE_FIX	2
-#define CANUSB_BAUD_RATE_DEFAULT 115200
+#define CANUSB_INJECT_SLEEP_GAP_DEFAULT 200 /* ms */
+#define CANUSB_TTY_BAUD_RATE_DEFAULT 2000000
 
 typedef enum {
   CANUSB_SPEED_1000000 = 0x01,
@@ -46,12 +43,18 @@ typedef enum {
   CANUSB_FRAME_EXTENDED = 0x02,
 } CANUSB_FRAME;
 
+typedef enum {
+    CANUSB_INJECT_PAYLOAD_MODE_RANDOM      = 0,
+    CANUSB_INJECT_PAYLOAD_MODE_INCREMENTAL = 1,
+    CANUSB_INJECT_PAYLOAD_MODE_FIXED       = 2,
+} CANUSB_PAYLOAD_MODE;
 
 
-int count = 0;
-int running = 1;
-int mode = MODE_FIX;
-float gap = DEFAULT_GAP;
+
+static int terminate_after = 0;
+static int program_running = 1;
+static int inject_payload_mode = CANUSB_INJECT_PAYLOAD_MODE_FIXED;
+static float inject_sleep_gap = CANUSB_INJECT_SLEEP_GAP_DEFAULT;
 static int print_traffic = 0;
 
 
@@ -90,7 +93,7 @@ static CANUSB_SPEED canusb_int_to_speed(int speed)
 
 
 
-static int generate_checksum(unsigned char *data, int data_len)
+static int generate_checksum(const unsigned char *data, int data_len)
 {
   int i, checksum;
 
@@ -104,7 +107,7 @@ static int generate_checksum(unsigned char *data, int data_len)
 
 
 
-static int frame_is_complete(unsigned char *frame, int frame_len)
+static int frame_is_complete(const unsigned char *frame, int frame_len)
 {
   if (frame_len > 0) {
     if (frame[0] != 0xaa) {
@@ -137,7 +140,7 @@ static int frame_is_complete(unsigned char *frame, int frame_len)
 
 
 
-static int frame_send(int tty_fd, unsigned char *frame, int frame_len)
+static int frame_send(int tty_fd, const unsigned char *frame, int frame_len)
 {
   int result, i;
 
@@ -176,7 +179,7 @@ static int frame_recv(int tty_fd, unsigned char *frame, int frame_len_max)
     fprintf(stderr, "<<< ");
 
   frame_len = 0;
-  while (running) {
+  while (program_running) {
     result = read(tty_fd, &byte, 1);
     if (result == -1) {
       if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -318,7 +321,7 @@ static int hex_value(int c)
 
 
 
-static int convert_from_hex(char *hex_string, unsigned char *bin_string, int bin_string_len)
+static int convert_from_hex(const char *hex_string, unsigned char *bin_string, int bin_string_len)
 {
   int n1, n2, high;
 
@@ -346,19 +349,19 @@ static int convert_from_hex(char *hex_string, unsigned char *bin_string, int bin
 
 
 
-static int inject_data_frame(int tty_fd, char *hex_id, char *hex_data)
+static int inject_data_frame(int tty_fd, const char *hex_id, const char *hex_data)
 {
   int data_len;
   unsigned char binary_data[8];
   unsigned char binary_id_lsb = 0, binary_id_msb = 0;
-  struct timespec ts;
+  struct timespec gap_ts;
   struct timeval now;
   int error = 0;
 
-  ts.tv_sec = gap / 1000;
-  ts.tv_nsec = (long)(((long long)(gap * 1000000)) % 1000000000LL);
+  gap_ts.tv_sec = inject_sleep_gap / 1000;
+  gap_ts.tv_nsec = (long)(((long long)(inject_sleep_gap * 1000000)) % 1000000000LL);
 
-  /* set seed value for pseudo random numbers */
+  /* Set seed value for pseudo random numbers. */
   gettimeofday(&now, NULL);
   srandom(now.tv_usec);
 
@@ -387,21 +390,19 @@ static int inject_data_frame(int tty_fd, char *hex_id, char *hex_data)
     return -1;
   }
 
-  while (running && ! error) {
-    if (ts.tv_sec || ts.tv_nsec)
-      nanosleep(&ts, NULL);
+  while (program_running && ! error) {
+    if (gap_ts.tv_sec || gap_ts.tv_nsec)
+      nanosleep(&gap_ts, NULL);
 
-    if (count && (--count == 0))
-      running = 0;
+    if (terminate_after && (--terminate_after == 0))
+      program_running = 0;
 
-    if (mode == MODE_RANDOM) {
+    if (inject_payload_mode == CANUSB_INJECT_PAYLOAD_MODE_RANDOM) {
       int i;
-      //binary_id_lsb = random();
       for (i = 0; i < data_len; i++)
         binary_data[i] = random();
-    } else if (mode == MODE_INCREMENT) {
+    } else if (inject_payload_mode == CANUSB_INJECT_PAYLOAD_MODE_INCREMENTAL) {
       int i;
-      //binary_id_lsb++;
       for (i = 0; i < data_len; i++)
         binary_data[i]++;
     }
@@ -420,8 +421,11 @@ static void dump_data_frames(int tty_fd)
   unsigned char frame[32];
   struct timespec ts;
 
-  while (running) {
+  while (program_running) {
     frame_len = frame_recv(tty_fd, frame, sizeof(frame));
+
+    if (! program_running)
+      break;
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     printf("%lu.%06lu ", ts.tv_sec, ts.tv_nsec / 1000);
@@ -441,19 +445,22 @@ static void dump_data_frames(int tty_fd)
         printf("\n");
 
       } else {
-        printf("Unknown:");
+        printf("Unknown: ");
         for (i = 0; i <= frame_len; i++) {
           printf("%02x ", frame[i]);
         }
         printf("\n");
       }
     }
+
+    if (terminate_after && (--terminate_after == 0))
+      program_running = 0;
   }
 }
 
 
 
-static int adapter_init(char *tty_device, int baudrate)
+static int adapter_init(const char *tty_device, int baudrate)
 {
   int tty_fd, result;
   struct termios2 tio;
@@ -491,7 +498,7 @@ static int adapter_init(char *tty_device, int baudrate)
 
 
 
-static void display_help(char *progname)
+static void display_help(const char *progname)
 {
   fprintf(stderr, "Usage: %s <options>\n", progname);
   fprintf(stderr, "Options:\n"
@@ -499,20 +506,25 @@ static void display_help(char *progname)
      "  -t          Print TTY/serial traffic debugging info on stderr.\n"
      "  -d DEVICE   Use TTY DEVICE.\n"
      "  -s SPEED    Set CAN SPEED in bps.\n"
-     "  -b BAUDRATE Set CAN USB baudrate in bps.\n"
+     "  -b BAUDRATE Set TTY/serial BAUDRATE (default: %d).\n"
      "  -i ID       Inject using ID (specified as hex string).\n"
      "  -j DATA     CAN DATA to inject (specified as hex string).\n"
-     "  -n COUNT    terminate after COUNT frames (default infinite).\n"
-     "  -g MS       gap in milli seconds (default: %d ms).\n"
-     "  -m MODE     payload mode (0 = random, 1 = incremental, 2 = fix).\n"
-     "\n", DEFAULT_GAP);
+     "  -n COUNT    Terminate after COUNT frames (default: infinite).\n"
+     "  -g MS       Inject sleep gap in MS milliseconds (default: %d ms).\n"
+     "  -m MODE     Inject payload MODE (%d = random, %d = incremental, %d = fixed).\n"
+     "\n",
+     CANUSB_TTY_BAUD_RATE_DEFAULT,
+     CANUSB_INJECT_SLEEP_GAP_DEFAULT,
+     CANUSB_INJECT_PAYLOAD_MODE_RANDOM,
+     CANUSB_INJECT_PAYLOAD_MODE_INCREMENTAL,
+     CANUSB_INJECT_PAYLOAD_MODE_FIXED);
 }
 
 
 
-void sigterm(int signo)
+static void sigterm(int signo)
 {
-  running = 0;
+  program_running = 0;
 }
 
 
@@ -522,7 +534,7 @@ int main(int argc, char *argv[])
   int c, tty_fd;
   char *tty_device = NULL, *inject_data = NULL, *inject_id = NULL;
   CANUSB_SPEED speed = 0;
-  int baudrate = CANUSB_BAUD_RATE_DEFAULT;
+  int baudrate = CANUSB_TTY_BAUD_RATE_DEFAULT;
 
   while ((c = getopt(argc, argv, "htd:s:b:i:j:n:g:m:")) != -1) {
     switch (c) {
@@ -555,15 +567,15 @@ int main(int argc, char *argv[])
       break;
 
     case 'n':
-      count = atoi(optarg);
+      terminate_after = atoi(optarg);
       break;
 
     case 'g':
-      gap = strtof(optarg, NULL);
+      inject_sleep_gap = strtof(optarg, NULL);
       break;
 
     case 'm':
-      mode = atoi(optarg);
+      inject_payload_mode = atoi(optarg);
       break;
 
     case '?':
