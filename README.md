@@ -37,8 +37,11 @@ Options:
 ```
 
 
-Example command:
+Example commands:
 ```
+# dump CAN bus traffic from 1 Mbit CAN bus
+./canusb -t -d /dev/ttyUSB0 -s1000000 -t
+
 # send the bytes 0xBEEE from ID 005 on at 1 Mbit CAN bus
 ./canusb -d /dev/ttyUSB0 -s1000000 -t -i 5 -j BEEE
 ```
