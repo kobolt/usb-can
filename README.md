@@ -45,3 +45,9 @@ $ ./canusb -t -d /dev/ttyUSB0 -s 1000000 -t
 # send the bytes 0xBEEE from ID 005 on at 1 Mbit CAN bus
 $ ./canusb -d /dev/ttyUSB0 -s 1000000 -t -i 5 -j BEEE
 ```
+
+
+## Open source firmware:
+If you experience problems with the default firmware for the USB-CAN adapter, then you can try the open source firmware from: https://github.com/Kosmonova/usb-can-firmware-stm32
+
+
