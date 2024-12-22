@@ -7,11 +7,18 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <asm/termbits.h> /* struct termios2 */
 #include <time.h>
 #include <ctype.h>
 #include <signal.h>
 #include <sys/time.h>
+
+#ifdef __linux__
+#include <asm/termbits.h> /* struct termios2 */
+#endif
+
+#ifdef __APPLE__
+#include <IOKit/serial/ioss.h>
+#endif
 
 #define CANUSB_INJECT_SLEEP_GAP_DEFAULT 200 /* ms */
 #define CANUSB_TTY_BAUD_RATE_DEFAULT 2000000
@@ -463,13 +470,15 @@ static void dump_data_frames(int tty_fd)
 static int adapter_init(const char *tty_device, int baudrate)
 {
   int tty_fd, result;
-  struct termios2 tio;
 
   tty_fd = open(tty_device, O_RDWR | O_NOCTTY | O_NONBLOCK);
   if (tty_fd == -1) {
     fprintf(stderr, "open(%s) failed: %s\n", tty_device, strerror(errno));
     return -1;
   }
+
+#ifdef __linux__
+  struct termios2 tio;
 
   result = ioctl(tty_fd, TCGETS2, &tio);
   if (result == -1) {
@@ -492,6 +501,35 @@ static int adapter_init(const char *tty_device, int baudrate)
     close(tty_fd);
     return -1;
   }
+#endif
+
+#ifdef __APPLE__
+  struct termios tio;
+
+  if (tcgetattr(tty_fd, &tio) < 0) {
+      fprintf(stderr, "tcgetattr() failed: %s\n", strerror(errno));
+      close(tty_fd);
+      return -1;
+  }
+
+  tio.c_cflag = CS8 | CSTOPB;
+  tio.c_iflag = IGNPAR;
+  tio.c_oflag = 0;
+  tio.c_lflag = 0;
+
+  if (tcsetattr(tty_fd, TCSANOW, &tio) < 0) {
+    fprintf(stderr, "tcsetattr() failed: %s\n", strerror(errno));
+    close(tty_fd);
+    return -1;
+  }
+
+  speed_t speed = baudrate;
+  if(ioctl(tty_fd, IOSSIOSPEED, &speed) < 0) {
+    fprintf(stderr, "ioctl() failed: %s\n", strerror(errno));
+    close(tty_fd);
+    return -1;
+  }
+#endif
 
   return tty_fd;
 }
