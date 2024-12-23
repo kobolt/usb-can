@@ -266,9 +266,9 @@ static int command_settings(int tty_fd, CANUSB_SPEED speed, CANUSB_MODE mode, CA
 
 
 
-static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned char id_lsb, unsigned char id_msb, unsigned char data[], int data_length_code)
+static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned long id, unsigned char data[], int data_length_code)
 {
-#define MAX_FRAME_SIZE 13
+#define MAX_FRAME_SIZE 15
   int data_frame_len = 0;
   unsigned char data_frame[MAX_FRAME_SIZE] = {0x00};
 
@@ -293,10 +293,16 @@ static int send_data_frame(int tty_fd, CANUSB_FRAME frame, unsigned char id_lsb,
   data_frame_len++;
 
   /* Byte 2 to 3: ID */
-  data_frame[data_frame_len++] = id_lsb; /* lsb */
-  data_frame[data_frame_len++] = id_msb; /* msb */
+  data_frame[data_frame_len++] = id & 0xFF; /* lsb */
+  data_frame[data_frame_len++] = (id >> 8) & 0xFF; /* msb */
+  if (frame == CANUSB_FRAME_EXTENDED)
+  {
+    /* Byte 4 to 5: Extended ID */
+    data_frame[data_frame_len++] = (id >> 16) & 0xFF;
+    data_frame[data_frame_len++] = (id >> 24) & 0xFF;
+  }
 
-  /* Byte 4 to (4+data_len): Data */
+  /* Byte 4 or 6 and on: Data */
   for (int i = 0; i < data_length_code; i++)
     data_frame[data_frame_len++] = data[i];
 
@@ -324,6 +330,19 @@ static int hex_value(int c)
     return (c - 0x61) + 10;
   else
     return -1;
+}
+
+
+
+static unsigned long convert_hex_id(const char *hex_string) {
+  unsigned long result = 0;
+  while (*hex_string) {
+    int val = hex_value(*hex_string);
+    if (val >= 0)
+      result = (result << 4) | val;
+    hex_string++;
+  }
+  return result;
 }
 
 
@@ -360,10 +379,10 @@ static int inject_data_frame(int tty_fd, const char *hex_id, const char *hex_dat
 {
   int data_len;
   unsigned char binary_data[8];
-  unsigned char binary_id_lsb = 0, binary_id_msb = 0;
   struct timespec gap_ts;
   struct timeval now;
   int error = 0;
+  CANUSB_FRAME frame_type = CANUSB_FRAME_STANDARD;
 
   gap_ts.tv_sec = inject_sleep_gap / 1000;
   gap_ts.tv_nsec = (long)(((long long)(inject_sleep_gap * 1000000)) % 1000000000LL);
@@ -378,23 +397,21 @@ static int inject_data_frame(int tty_fd, const char *hex_id, const char *hex_dat
     return -1;
   }
 
-  switch (strlen(hex_id)) {
-  case 1:
-    binary_id_lsb = hex_value(hex_id[0]);
-    break;
+  size_t id_len = strlen(hex_id);
+  unsigned long id = convert_hex_id(hex_id);
 
-  case 2:
-    binary_id_lsb = (hex_value(hex_id[0]) * 16) + hex_value(hex_id[1]);
-    break;
-
-  case 3:
-    binary_id_msb = hex_value(hex_id[0]);
-    binary_id_lsb = (hex_value(hex_id[1]) * 16) + hex_value(hex_id[2]);
-    break;
-
-  default:
-    fprintf(stderr, "Unable to convert ID from hex to binary!\n");
-    return -1;
+  if (id_len <= 3) {
+    if (id > 0x7FF) {
+      fprintf(stderr, "Standard CAN ID cannot exceed 11 bits (0x7FF)!\n");
+      return -1;
+    }
+    frame_type = CANUSB_FRAME_STANDARD;
+  } else {
+    if (id > 0x1FFFFFFF) {
+      fprintf(stderr, "Extended CAN ID cannot exceed 29 bits (0x1FFFFFFF)!\n");
+      return -1;
+    }
+    frame_type = CANUSB_FRAME_EXTENDED;
   }
 
   while (program_running && ! error) {
@@ -414,7 +431,7 @@ static int inject_data_frame(int tty_fd, const char *hex_id, const char *hex_dat
         binary_data[i]++;
     }
 
-    error = send_data_frame(tty_fd, CANUSB_FRAME_STANDARD, binary_id_lsb, binary_id_msb, binary_data, data_len);
+    error = send_data_frame(tty_fd, frame_type, id, binary_data, data_len);
   }
 
   return error;
